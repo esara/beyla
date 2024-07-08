@@ -31,25 +31,33 @@ type Tracer struct {
 	bpfObjects bpfObjects
 	closers    []io.Closer
 	log        *slog.Logger
-	Service    *svc.ID
+	Service    *svc.Attrs
 }
 
-func New(cfg *beyla.Config, metrics imetrics.Reporter) *Tracer {
+func New(cfg *beyla.Config, metrics imetrics.Reporter, fileInfo *exec.FileInfo) *Tracer {
 	log := slog.With("component", "gpuevent.Tracer")
+
+	if fileInfo == nil || fileInfo.ELF == nil {
+		log.Error("Empty fileinfo for Cuda")
+	} else {
+		ebpfcommon.ProcessCudaFileInfo(fileInfo)
+	}
 	return &Tracer{
 		log:        log,
 		cfg:        cfg,
 		metrics:    metrics,
-		pidsFilter: ebpfcommon.CommonPIDsFilter(cfg.Discovery.SystemWide),
+		pidsFilter: ebpfcommon.CommonPIDsFilter(&cfg.Discovery),
 	}
 }
 
-func (p *Tracer) AllowPID(pid, ns uint32, svc svc.ID) {
-	p.pidsFilter.AllowPID(pid, ns, svc, ebpfcommon.PIDTypeKProbes)
+func (p *Tracer) AllowPID(pid uint32, fi *exec.FileInfo) {
+	ebpfcommon.EstablishCudaPID(pid, fi)
+	p.pidsFilter.AllowPID(pid, fi.Ns, &fi.Service, ebpfcommon.PIDTypeKProbes)
 }
 
-func (p *Tracer) BlockPID(pid, ns uint32) {
-	p.pidsFilter.BlockPID(pid, ns)
+func (p *Tracer) BlockPID(pid uint32, fi *exec.FileInfo) {
+	ebpfcommon.RemoveCudaPID(pid, fi)
+	p.pidsFilter.BlockPID(pid, fi.Ns)
 }
 
 func (p *Tracer) Load() (*ebpf.CollectionSpec, error) {
@@ -71,12 +79,6 @@ func (p *Tracer) Constants(_ *exec.FileInfo, _ *goexec.Offsets) map[string]any {
 		m["filter_pids"] = int32(1)
 	} else {
 		m["filter_pids"] = int32(0)
-	}
-
-	if p.cfg.EBPF.TrackRequestHeaders {
-		m["capture_header_buffer"] = int32(1)
-	} else {
-		m["capture_header_buffer"] = int32(0)
 	}
 
 	return m
@@ -104,14 +106,16 @@ func (p *Tracer) Tracepoints() map[string]ebpfcommon.FunctionPrograms {
 
 func (p *Tracer) UProbes() map[string]map[string]ebpfcommon.FunctionPrograms {
 	return map[string]map[string]ebpfcommon.FunctionPrograms{
-		"libcuda.so": {
-			"cuda_kernel_launch": {
-				Required: true,
+		"libcudart.so": {
+			"cudaLaunchKernel": {
+				Required: false,
 				Start:    p.bpfObjects.HandleCudaLaunch,
 			},
 		},
 	}
 }
+
+func (p *Tracer) SetupTailCalls() {}
 
 func (p *Tracer) SocketFilters() []*ebpf.Program {
 	return nil
@@ -136,7 +140,7 @@ func (p *Tracer) Run(ctx context.Context, eventsChan chan<- []request.Span) {
 	ebpfcommon.SharedRingbuf(
 		&p.cfg.EBPF,
 		p.pidsFilter,
-		p.bpfObjects.Rb,
+		p.bpfObjects.Events,
 		p.metrics,
 	)(ctx, append(p.closers, &p.bpfObjects), eventsChan)
 }

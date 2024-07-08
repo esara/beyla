@@ -188,6 +188,15 @@ func SpanPromGetters(attrName attr.Name) (attributes.Getter[*Span, string], bool
 		getter = func(s *Span) string { return s.Service.UID.Name }
 	case attr.ServiceNamespace:
 		getter = func(s *Span) string { return s.Service.UID.Namespace }
+	case attr.CudaKernelName:
+		getter = func(s *Span) string {
+			// cuda kernel names can be very long, truncate them to 1000 characters
+			// for now until we have a better way to handle them.
+			if len(s.Method) > 1000 {
+				return s.Method[:1000]
+			}
+			return s.Method
+		}
 	default:
 		getter = func(s *Span) string { return s.Service.Metadata[attrName] }
 	}

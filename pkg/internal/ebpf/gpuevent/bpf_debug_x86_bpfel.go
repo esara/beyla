@@ -60,7 +60,10 @@ type bpf_debugProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpf_debugMapSpecs struct {
-	Rb *ebpf.MapSpec `ebpf:"rb"`
+	DebugEvents *ebpf.MapSpec `ebpf:"debug_events"`
+	Events      *ebpf.MapSpec `ebpf:"events"`
+	PidCache    *ebpf.MapSpec `ebpf:"pid_cache"`
+	ValidPids   *ebpf.MapSpec `ebpf:"valid_pids"`
 }
 
 // bpf_debugObjects contains all objects after they have been loaded into the kernel.
@@ -82,12 +85,18 @@ func (o *bpf_debugObjects) Close() error {
 //
 // It can be passed to loadBpf_debugObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpf_debugMaps struct {
-	Rb *ebpf.Map `ebpf:"rb"`
+	DebugEvents *ebpf.Map `ebpf:"debug_events"`
+	Events      *ebpf.Map `ebpf:"events"`
+	PidCache    *ebpf.Map `ebpf:"pid_cache"`
+	ValidPids   *ebpf.Map `ebpf:"valid_pids"`
 }
 
 func (m *bpf_debugMaps) Close() error {
 	return _Bpf_debugClose(
-		m.Rb,
+		m.DebugEvents,
+		m.Events,
+		m.PidCache,
+		m.ValidPids,
 	)
 }
 
@@ -115,5 +124,5 @@ func _Bpf_debugClose(closers ...io.Closer) error {
 
 // Do not access this directly.
 //
-//go:embed bpf_debug_bpfel_x86.o
+//go:embed bpf_debug_x86_bpfel.o
 var _Bpf_debugBytes []byte
