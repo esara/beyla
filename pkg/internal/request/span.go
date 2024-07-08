@@ -32,6 +32,7 @@ const (
 	EventTypeKafkaClient
 	EventTypeRedisServer
 	EventTypeKafkaServer
+	EventTypeGPUKernelLaunch
 )
 
 const (

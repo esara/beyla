@@ -141,6 +141,9 @@ const (
 	HostName = Name(semconv.HostNameKey)
 	HostID   = Name(semconv.HostIDKey)
 
+	// GPU/Cuda related attributes
+	CudaKernelName = Name("cuda.kernel.name")
+
 	ServiceInstanceID = Name(semconv.ServiceInstanceIDKey)
 )
 
