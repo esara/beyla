@@ -152,6 +152,7 @@ func ReadSQLRequestTraceAsSpan(record *ringbuf.Record) (request.Span, bool, erro
 		return request.Span{}, true, err
 	}
 
+	log.Info("ReadSQLRequestTraceAsSpan Connection", event.Conn)
 	return SQLRequestTraceToSpan(&event), false, nil
 }
 

@@ -76,14 +76,25 @@ func SQLRequestTraceToSpan(trace *SQLRequestTrace) request.Span {
 
 	method, path := sqlprune.SQLParseOperationAndTable(sql)
 
+	hostname := ""
+	hostPort := 0
+	peer := ""
+	peerPort := 0
+
+	if trace.Conn.S_port != 0 || trace.Conn.D_port != 0 {
+		hostname, peer = (*BPFConnInfo)(unsafe.Pointer(&trace.Conn)).reqHostInfo()
+		hostPort = int(trace.Conn.S_port)
+		peerPort = int(trace.Conn.D_port)
+	}
+
 	return request.Span{
 		Type:          request.EventType(trace.Type),
 		Method:        method,
 		Path:          path,
-		Peer:          "",
-		PeerPort:      0,
-		Host:          "",
-		HostPort:      0,
+		Peer:          peer,
+		PeerPort:      peerPort,
+		Host:          hostname,
+		HostPort:      hostPort,
 		ContentLength: 0,
 		RequestStart:  int64(trace.StartMonotimeNs),
 		Start:         int64(trace.StartMonotimeNs),
