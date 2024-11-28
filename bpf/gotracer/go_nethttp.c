@@ -184,7 +184,7 @@ int beyla_uprobe_readRequestStart(struct pt_regs *ctx) {
                            sizeof(tls_state),
                            (void *)(c_ptr + go_offset_of(ot, (go_offset){.v = _c_tls_pos})));
             conn_conn_ptr = unwrap_tls_conn_info(conn_conn_ptr, tls_state);
-            //bpf_dbg_printk("conn_conn_ptr %llx, tls_state %llx, c_tls_pos = %d, c_tls_ptr = %llx", conn_conn_ptr, tls_state, c_tls_pos, c_ptr + c_tls_pos);
+            bpf_dbg_printk("conn_conn_ptr %llx, tls_state %llx, c_tls_pos = %d, c_tls_ptr = %llx", conn_conn_ptr, tls_state, _c_tls_pos, c_ptr + _c_tls_pos);
             if (conn_conn_ptr) {
                 void *conn_ptr = 0;
                 bpf_probe_read(
@@ -1098,6 +1098,16 @@ int beyla_uprobe_netFdRead(struct pt_regs *ctx) {
         void *fd_ptr = GO_PARAM1(ctx);
         get_conn_info_from_fd(fd_ptr,
                               &sql_conn->conn); // ok to not check the result, we leave it as 0
+    }
+
+    http_func_invocation_t *invocation = bpf_map_lookup_elem(&ongoing_http_client_requests, &g_key);
+    bpf_dbg_printk("http client conn %llx", invocation);
+    if (invocation) {
+        connection_info_t c_conn = {0};
+        void *fd_ptr = GO_PARAM1(ctx);
+        get_conn_info_from_fd(fd_ptr,
+                              &c_conn); // ok to not check the result, we leave it as 0
+        bpf_map_update_elem(&ongoing_client_connections, &g_key, &c_conn, BPF_NOEXIST);
     }
 
     return 0;
