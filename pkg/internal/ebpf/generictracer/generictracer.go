@@ -29,6 +29,7 @@ import (
 //go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 bpf_debug ../../../../bpf/generic_tracer.c -- -I../../../../bpf/headers -DBPF_DEBUG
 //go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 bpf_tp_debug ../../../../bpf/generic_tracer.c -- -I../../../../bpf/headers -DBPF_DEBUG -DBPF_TRACEPARENT
 
+// Hold onto Linux inode numbers of files that are already instrumented, e.g. libssl.so.3
 var instrumentedLibs = make(ebpfcommon.InstrumentedLibsT)
 var libsMux sync.Mutex
 
@@ -127,15 +128,14 @@ func (p *Tracer) Load() (*ebpf.CollectionSpec, error) {
 		loader = loadBpf_debug
 	}
 
-	if p.cfg.EBPF.TrackRequestHeaders || p.cfg.EBPF.UseTCForL7CP || p.cfg.EBPF.ContextPropagationEnabled {
-		if ebpfcommon.SupportsEBPFLoops(p.log, p.cfg.EBPF.OverrideBPFLoopEnabled) {
-			p.log.Info("Found compatible Linux kernel, enabling trace information parsing")
+	if p.cfg.EBPF.TrackRequestHeaders || p.cfg.EBPF.UseTCForL7CP || p.cfg.EBPF.UseTCForCP {
+		if ebpfcommon.SupportsEBPFLoops() {
+			p.log.Info("Found Linux kernel later than 5.17, enabling trace information parsing")
 			loader = loadBpf_tp
 			if p.cfg.EBPF.BpfDebug {
 				loader = loadBpf_tp_debug
 			}
 		}
-		p.log.Info("Found incompatible Linux kernel, disabling trace information parsing")
 	}
 
 	return loader()
@@ -194,7 +194,7 @@ func (p *Tracer) Constants() map[string]any {
 		m["filter_pids"] = int32(0)
 	}
 
-	if p.cfg.EBPF.TrackRequestHeaders || p.cfg.EBPF.UseTCForL7CP || p.cfg.EBPF.ContextPropagationEnabled {
+	if p.cfg.EBPF.TrackRequestHeaders || p.cfg.EBPF.UseTCForL7CP || p.cfg.EBPF.UseTCForCP {
 		m["capture_header_buffer"] = int32(1)
 	} else {
 		m["capture_header_buffer"] = int32(0)
@@ -222,8 +222,6 @@ func (p *Tracer) Constants() map[string]any {
 
 func (p *Tracer) RegisterOffsets(_ *exec.FileInfo, _ *goexec.Offsets) {}
 
-func (p *Tracer) ProcessBinary(_ *exec.FileInfo) {}
-
 func (p *Tracer) BpfObjects() any {
 	return &p.bpfObjects
 }
@@ -237,7 +235,7 @@ func (p *Tracer) GoProbes() map[string][]*ebpfcommon.ProbeDesc {
 }
 
 func (p *Tracer) KProbes() map[string]ebpfcommon.ProbeDesc {
-	kp := map[string]ebpfcommon.ProbeDesc{
+	return map[string]ebpfcommon.ProbeDesc{
 		// Both sys accept probes use the same kretprobe.
 		// We could tap into __sys_accept4, but we might be more prone to
 		// issues with the internal kernel code changing.
@@ -261,11 +259,6 @@ func (p *Tracer) KProbes() map[string]ebpfcommon.ProbeDesc {
 		"sys_connect": {
 			Required: true,
 			End:      p.bpfObjects.BeylaKretprobeSysConnect,
-		},
-		"sock_recvmsg": {
-			Required: true,
-			Start:    p.bpfObjects.BeylaKprobeSockRecvmsg,
-			End:      p.bpfObjects.BeylaKretprobeSockRecvmsg,
 		},
 		"tcp_connect": {
 			Required: true,
@@ -312,22 +305,6 @@ func (p *Tracer) KProbes() map[string]ebpfcommon.ProbeDesc {
 			End:      p.bpfObjects.BeylaKretprobeUnixStreamSendmsg,
 		},
 	}
-
-	if p.cfg.EBPF.ContextPropagationEnabled {
-		// tcp_rate_check_app_limited and tcp_sendmsg_fastopen are backup
-		// for tcp_sendmsg_locked which doesn't fire on certain kernels
-		// if sk_msg is attached.
-		kp["tcp_rate_check_app_limited"] = ebpfcommon.ProbeDesc{
-			Required: false,
-			Start:    p.bpfObjects.BeylaKprobeTcpRateCheckAppLimited,
-		}
-		kp["tcp_sendmsg_fastopen"] = ebpfcommon.ProbeDesc{
-			Required: false,
-			Start:    p.bpfObjects.BeylaKprobeTcpRateCheckAppLimited,
-		}
-	}
-
-	return kp
 }
 
 func (p *Tracer) Tracepoints() map[string]ebpfcommon.ProbeDesc {
@@ -357,6 +334,11 @@ func (p *Tracer) UProbes() map[string]map[string][]*ebpfcommon.ProbeDesc {
 				Start:    p.bpfObjects.BeylaUprobeSslWriteEx,
 				End:      p.bpfObjects.BeylaUretprobeSslWriteEx,
 			}},
+			"SSL_do_handshake": {{
+				Required: false,
+				Start:    p.bpfObjects.BeylaUprobeSslDoHandshake,
+				End:      p.bpfObjects.BeylaUretprobeSslDoHandshake,
+			}},
 			"SSL_shutdown": {{
 				Required: false,
 				Start:    p.bpfObjects.BeylaUprobeSslShutdown,
@@ -384,12 +366,6 @@ func (p *Tracer) UProbes() map[string]map[string][]*ebpfcommon.ProbeDesc {
 				Start:    p.bpfObjects.BeylaAsyncReset,
 			}},
 		},
-		"libjvm.so": {
-			"_ZN9CodeCache6commitEP8CodeBlob": {{
-				Required: false,
-				Start:    p.bpfObjects.BeylaCodeCacheCommit,
-			}},
-		},
 	}
 }
 
@@ -408,7 +384,7 @@ func (p *Tracer) RecordInstrumentedLib(id uint64, closers []io.Closer) {
 	module := instrumentedLibs.AddRef(id)
 
 	if len(closers) > 0 {
-		module.Closers = append(module.Closers, closers...)
+		module.AddClosers(closers)
 	}
 
 	p.log.Debug("Recorded instrumented Lib", "ino", id, "module", module)
@@ -439,6 +415,9 @@ func (p *Tracer) AlreadyInstrumentedLib(id uint64) bool {
 
 	p.log.Debug("checking already instrumented Lib", "ino", id, "module", module)
 	return module != nil
+}
+
+func (p *Tracer) SetupTC() {
 }
 
 func (p *Tracer) Run(ctx context.Context, eventsChan chan<- []request.Span) {
@@ -522,7 +501,7 @@ func (p *Tracer) watchForMisclassifedEvents() {
 			if p.bpfObjects.OngoingHttp2Connections != nil {
 				err := p.bpfObjects.OngoingHttp2Connections.Put(
 					&bpfPidConnectionInfoT{Conn: bpfConnectionInfoT(e.TCPInfo.ConnInfo), Pid: e.TCPInfo.Pid.HostPid},
-					uint8(e.TCPInfo.Ssl), // no new connection flag (0x3)
+					uint8(e.TCPInfo.Ssl),
 				)
 				if err != nil {
 					p.log.Debug("error writing HTTP2/gRPC connection info", "error", err)
