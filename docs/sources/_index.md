@@ -75,6 +75,58 @@ As a result, the telemetry provided by library or agent instrumentation, may ind
 
 Beyla looks at interactions from outside of the application, on the kernel's network level. Therefore, the latency numbers produced by Beyla represent the behavior as seen by the client, including queue times. This is not just a nuance: Queue times may be orders of magnitude higher than the actual service times if an application is struggling to keep up with the amount of requests being sent its way. To read more about this, refer to the [Measuring total request times, instead of service times](./requesttime.md) section of the documentation.
 
+## Determine compatibility
+
+Before you get started, you can use the following matrix to determine whether you should use Beyla, OpenTelemetry SDKs, or both.
+
+- _Recommended_: best default choice
+- _Supported with warnings_: works, but there are important limitations
+- _Not recommended_: use another approach
+
+| Scenario / technology | Beyla for RED metrics and service graphs | Beyla for distributed traces | OTel SDKs / agents for distributed traces | Recommended approach | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Any backend service, as a baseline | Recommended | Supported with warnings | Recommended | Use Beyla for baseline metrics; use SDKs for traces when available | Beyla is strongest as a zero-code baseline layer for RED metrics and service graphs. SDKs remain the default recommendation for detailed distributed tracing. |
+| Service already instrumented with an OTel SDK | Recommended | Not recommended | Recommended | Keep Beyla for metrics; let the SDK own tracing | Avoid parallel tracing from both Beyla and the SDK in the same service. When using SDK traces together with Beyla metrics, set `span.metrics.skip=true` on SDK traces so metrics are not generated twice. |
+| Go HTTP / HTTP2 / HTTPS services | Recommended | Recommended | Supported with warnings | Beyla-only is viable; add SDKs only if you need deeper app-level detail | Go is a first-class case for eBPF tracing. Beyla/OBI supports Go HTTP, HTTP2, and gRPC context propagation through library-level instrumentation. |
+| Go gRPC services | Recommended | Recommended | Supported with warnings | Beyla-only is viable; add SDKs only if you need deeper app-level detail | Go gRPC is one of the strongest Beyla tracing cases. |
+| Java HTTP services (standard servlet / thread-pool model) | Recommended | Supported with warnings | Recommended | Use Beyla for metrics; prefer SDK tracing | Beyla tracing can work for Java in standard thread-pool models, but SDK traces are still the more robust default. |
+| Java reactive / thread-switching frameworks | Recommended | Not recommended | Recommended | Use Beyla for metrics; use SDK tracing | Reactive Java is not a good fit for eBPF trace correlation. Beyla may emit stand-alone spans that are not attached to the correct trace. |
+| Node.js HTTP services | Recommended | Supported with warnings | Recommended | Use Beyla for metrics; prefer SDK tracing when feasible | Beyla tracing works reasonably well for Node.js, but SDKs still provide richer spans and stronger log/runtime correlation. |
+| Python HTTP services | Recommended | Supported with warnings | Recommended | Use Beyla for metrics; prefer SDK tracing when feasible | Python tracing support is reasonable, but async context propagation has framework-specific warnings. |
+| Python async applications | Recommended | Supported with warnings | Recommended | Use Beyla for metrics; prefer SDK tracing | Async context propagation support depends on the runtime model; verify framework compatibility before relying on Beyla traces alone. |
+| Ruby services | Recommended | Supported with warnings | Recommended | Use Beyla for metrics; prefer SDK tracing | Ruby support is reasonable, but async/framework coverage is narrower than with SDK tracing. |
+| .NET services | Recommended | Not recommended | Recommended | Use Beyla for metrics; use SDK tracing | Treat Beyla tracing for .NET as not ready for general recommendation. |
+| Mixed polyglot environment with uneven SDK coverage | Recommended | Supported with warnings | Recommended where available | Use a hybrid model | A practical pattern is Beyla everywhere for baseline metrics and service graphs, then SDKs on the services where you need deep tracing, log correlation, runtime metrics, or custom telemetry. |
+
+### Practical guidance
+
+Use Beyla first when you need:
+
+- zero-code rollout
+- RED metrics and service graphs
+- broad baseline visibility across many services
+- coverage for services where SDK rollout is hard or impossible
+
+Use OTel SDKs or agents when you need:
+
+- the most reliable distributed tracing
+- internal spans and framework/library detail
+- trace-to-log correlation
+- runtime metrics
+- custom span attributes, events, and business telemetry
+
+Use Beyla and SDKs together when:
+- you want Beyla to provide baseline metrics and service graphs
+- you want SDKs to provide deep traces
+- you configure SDK traces with `span.metrics.skip=true` to avoid duplicate span metrics
+
+### Important warnings
+
+- Do **not** rely on Beyla as the default tracing recommendation for every language and framework.
+- Do **not** run Beyla tracing and SDK tracing in parallel for the same service unless you have verified the behavior carefully.
+- For non-Go services, especially async or reactive frameworks, treat Beyla trace support as something to validate before recommending broadly.
+- If a customer can use SDK traces without major friction, that is still the safer general recommendation for tracing.
+
 ## Requirements
 
 - Linux with Kernel 5.8 or higher with BPF Type Format [(BTF)](https://www.kernel.org/doc/html/latest/bpf/btf.html)
@@ -89,9 +141,9 @@ Beyla looks at interactions from outside of the application, on the kernel's net
 
 ## Limitations
 
-Beyla has its limitations too. It only provides generic metrics and transaction level trace span information. Language agents and manual instrumentation is still recommended, so that you can specify the granularity of each part of the code to be instrumented, putting the focus on your critical operations.
+Beyla only provides generic metrics and transaction level trace span information. Language agents and manual instrumentation are still recommended so that you can specify the granularity of each part of the code to be instrumented, putting the focus on your critical operations.
 
-While most eBPF programs require elevated privileges, Beyla allow you to specify finer grained permissions to run with minimum required permissions, such as: `CAP_DAC_READ_SEARCH`, `CAP_SYS_PTRACE`, `CAP_PERFMON`, `CAP_BPF`, `CAP_CHECKPOINT_RESTORE`, and `CAP_NET_RAW`.
+While most eBPF programs require elevated privileges, Beyla allows you to specify finer grained permissions to run with minimum required permissions, such as: `CAP_DAC_READ_SEARCH`, `CAP_SYS_PTRACE`, `CAP_PERFMON`, `CAP_BPF`, `CAP_CHECKPOINT_RESTORE`, and `CAP_NET_RAW`.
 
 Some Beyla functionality requires further permissions, for example using the network observability probes with Linux Traffic Control requires `CAP_NET_ADMIN`, but it's a feature you have to optionally enable.
 
