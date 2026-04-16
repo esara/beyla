@@ -83,6 +83,8 @@ Before you get started, you can use the following matrix to determine whether yo
 - _Supported with limitations_: works, but there are important limitations
 - _Not recommended_: use another approach
 
+{{< fixed-table >}}
+
 | Technology | Beyla: RED metrics | Beyla: traces | OTel SDKs: traces | Notes |
 | --- | --- | --- | --- | --- |
 | **Baseline (any service)** | Recommended | Supported with limitations | Recommended | Beyla is strongest as a zero-code baseline layer for RED metrics and service graphs. SDKs remain the default recommendation for detailed distributed tracing. |
@@ -97,6 +99,8 @@ Before you get started, you can use the following matrix to determine whether yo
 | **Ruby** | Recommended | Supported with limitations | Recommended | Ruby support is reasonable, but async/framework coverage is narrower than with SDK tracing. |
 | **.NET** | Recommended | Supported with limitations | Recommended | Beyla tracing works well when the .NET service is not the first in the call chain. If it is the entry point, tracing may not work correctly. Validate behavior before relying on Beyla traces for .NET in production. |
 | **Mixed polyglot environment** | Recommended | Supported with limitations | Recommended where available | A practical pattern is Beyla everywhere for baseline metrics and service graphs, then SDKs on the services where you need deep tracing, log correlation, runtime metrics, or custom telemetry. |
+
+{{< /fixed-table >}}
 
 ### Practical guidance
 
