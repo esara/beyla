@@ -8,7 +8,7 @@
 #
 # Notes:
 #   - Versions must be SemVer tags: vMAJOR.MINOR.PATCH
-#   - Release branch naming is: release-MAJOR.MINOR.PATCH (no "v" prefix)
+#   - Release branch naming is: release-MAJOR.MINOR (no "v" prefix, no PATCH)
 #   - Run from any directory (the script uses temporary clones)
 
 set -euo pipefail
@@ -164,6 +164,20 @@ validate_semver_tag() {
 version_without_v() {
     local tag="$1"
     echo "${tag#v}"
+}
+
+release_branch_name() {
+    local tag="$1"
+    local major minor _patch
+    IFS='.' read -r major minor _patch <<< "${tag#v}"
+    echo "release-${major}.${minor}"
+}
+
+is_patch_release() {
+    local tag="$1"
+    local _major _minor patch
+    IFS='.' read -r _major _minor patch <<< "${tag#v}"
+    [[ "$patch" != "0" ]]
 }
 
 parse_semver() {
@@ -364,6 +378,19 @@ resolve_obi_sha_from_beyla_main() {
     echo "$obi_sha"
 }
 
+resolve_obi_sha_from_beyla_branch() {
+    local branch="$1"
+    local tree_line
+    tree_line=$(git -C "$BEYLA_DIR" ls-tree "origin/${branch}" .obi-src) || {
+        die "Failed to inspect .obi-src in ${BEYLA_REPO}:${branch}"
+    }
+
+    local obi_sha
+    obi_sha=$(awk '{print $3}' <<< "$tree_line")
+    [[ -n "$obi_sha" ]] || die "Could not determine .obi-src SHA from ${BEYLA_REPO}:${branch}"
+    echo "$obi_sha"
+}
+
 latest_semver_tag_from_repo() {
     local repo_dir="$1"
     git -C "$repo_dir" tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
@@ -497,6 +524,7 @@ prepare_obi_branch() {
     local version="$1"
     local release_branch="$2"
     local obi_sha="$3"
+    local is_patch="${4:-false}"
 
     run_git_remote_cmd -C "$OBI_DIR" fetch --prune origin
 
@@ -507,6 +535,9 @@ prepare_obi_branch() {
             die "Existing OBI branch ${release_branch} does not contain pinned SHA ${obi_sha}"
         fi
     else
+        if [[ "$is_patch" == "true" ]]; then
+            die "Patch release requested but OBI branch ${release_branch} does not exist."
+        fi
         run_cmd git -C "$OBI_DIR" checkout "$obi_sha"
         run_cmd git -C "$OBI_DIR" checkout -B "$release_branch"
     fi
@@ -656,15 +687,37 @@ prepare_command() {
         check_obi_fork_sync
     fi
 
-    local obi_sha
-    obi_sha="$(resolve_obi_sha_from_beyla_main)"
-    log_info "OBI SHA pinned in ${BEYLA_REPO}:${BEYLA_MAIN_BRANCH}: ${obi_sha}"
-
     resolve_prepare_versions
-    local beyla_release_branch="release-$(version_without_v "$BEYLA_VERSION")"
-    local obi_release_branch="release-$(version_without_v "$OBI_VERSION")"
+    local beyla_release_branch
+    beyla_release_branch="$(release_branch_name "$BEYLA_VERSION")"
+    local obi_release_branch
+    obi_release_branch="$(release_branch_name "$OBI_VERSION")"
 
-    prepare_obi_branch "$OBI_VERSION" "$obi_release_branch" "$obi_sha"
+    local beyla_is_patch="false"
+    if is_patch_release "$BEYLA_VERSION"; then
+        beyla_is_patch="true"
+    fi
+    local obi_is_patch="false"
+    if is_patch_release "$OBI_VERSION"; then
+        obi_is_patch="true"
+    fi
+
+    local obi_sha
+    if [[ "$beyla_is_patch" == "true" ]]; then
+        # For Beyla patch releases, the release branch already exists.
+        # Read the OBI SHA from the existing release branch instead of main.
+        run_git_remote_cmd -C "$BEYLA_DIR" fetch --prune origin
+        if ! git -C "$BEYLA_DIR" show-ref --verify --quiet "refs/remotes/origin/${beyla_release_branch}"; then
+            die "Patch release ${BEYLA_VERSION} requested but branch ${beyla_release_branch} does not exist."
+        fi
+        obi_sha="$(resolve_obi_sha_from_beyla_branch "$beyla_release_branch")"
+        log_info "OBI SHA from existing ${beyla_release_branch}: ${obi_sha}"
+    else
+        obi_sha="$(resolve_obi_sha_from_beyla_main)"
+        log_info "OBI SHA pinned in ${BEYLA_REPO}:${BEYLA_MAIN_BRANCH}: ${obi_sha}"
+    fi
+
+    prepare_obi_branch "$OBI_VERSION" "$obi_release_branch" "$obi_sha" "$obi_is_patch"
     local obi_release_sha
     obi_release_sha="$(git -C "$OBI_DIR" rev-parse HEAD)"
     log_info "OBI release branch tip SHA: ${obi_release_sha}"
@@ -690,8 +743,10 @@ tag_command() {
     ensure_gh_auth
 
     resolve_tag_versions
-    local beyla_release_branch="release-$(version_without_v "$BEYLA_VERSION")"
-    local obi_release_branch="release-$(version_without_v "$OBI_VERSION")"
+    local beyla_release_branch
+    beyla_release_branch="$(release_branch_name "$BEYLA_VERSION")"
+    local obi_release_branch
+    obi_release_branch="$(release_branch_name "$OBI_VERSION")"
 
     setup_workspace
 
